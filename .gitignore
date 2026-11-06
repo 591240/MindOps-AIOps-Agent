@@ -1,0 +1,62 @@
+# ---- 依赖与虚拟环境 ----
+.venv/
+__pycache__/
+*.py[cod]
+node_modules/
+
+# ---- 构建产物与本地缓存 ----
+dist/
+.tsbuildinfo
+*.tsbuildinfo
+.pytest_cache/
+.pytest-tmp/
+.tanstack/
+
+# ---- 密钥：绝不进仓库（.env 含真实 SMTP 授权码 / JWT / Fernet 主密钥）----
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# ---- 运行时数据与备份（含口令哈希、验证码表全量数据）----
+mindops-backend/data/*
+# 评测集是项目的一部分，必须进仓库
+!mindops-backend/data/eval/
+*.sql
+*.db
+*.sqlite
+embedding_cache.json
+
+# ---- 本地临时输出与材料（与源码无关）----
+*_out.txt
+eval_result.json
+eval_report.txt
+eval_result.*.json
+eval_report.*.txt
+
+# ---- 历史版本备份：体积大且含旧代码，不进仓库 ----
+_backup/
+output/
+答辩PPT/
+*.log
+.DS_Store
+
+# ---- 各类助手工具目录 ----
+.workbuddy/
+.workbuddy-ai/
+.zcode/
+
+# ---- 私人材料：按方案 B 不进公开仓库（本地文件不受影响，删掉本段即恢复）----
+项目介绍讲稿-5分钟.md
+docs/
+24-代码库技术文档.md
+34-个人开发笔记-V1.0.md
+DESIGN.md
+开源对标-同类项目调研与改进建议.md
+UI对标-同类产品界面分析与改进清单.md
+智维MindOps-自学讲义.md
+面试准备-MindOps高频问题清单.md
+面试题PRD-MindOps-AI-Agent岗位.md
+切片的三层结构与参数.html
+知识库写入流水线.png
+知识库写入的四个动作_大白话版.png

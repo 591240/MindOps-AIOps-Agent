@@ -1,0 +1,123 @@
+# MindOps 生产编排（单机公网部署）。
+#
+# 使用方式：
+#   cp mindops-backend/.env.production.example mindops-backend/.env.production
+#   # 填写密钥与域名后：
+#   docker compose --env-file mindops-backend/.env.production up -d --build
+#
+# 与 docker-compose.dev.yml 的区别：
+#   - MySQL / Redis / 前端 Nginx 全部起容器，不依赖宿主机服务
+#   - DEBUG=false、不播种演示账号、自助注册默认关闭
+#   - 只有 Nginx 暴露端口；后端/数据库/Redis 仅在内部网络可达
+#   - 网络固定为 172.28.0.0/24，backend 的白名单据此信任 Nginx 的 XFF
+
+name: mindops
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MINDOPS_MYSQL_ROOT_PASSWORD:?请在 .env.production 中设置}
+      MYSQL_DATABASE: ${MINDOPS_MYSQL_DB:-mindops}
+      MYSQL_USER: ${MINDOPS_MYSQL_USER:-mindops}
+      MYSQL_PASSWORD: ${MINDOPS_MYSQL_PASSWORD:?请在 .env.production 中设置}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    networks: [mindops]
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [mindops]
+    logging: *default-logging
+
+  backend:
+    build:
+      context: ./mindops-backend
+      args:
+        # 国内服务器建议在 .env.production 改成清华源，否则 pypi.org 常在中途卡住
+        PIP_INDEX_URL: ${MINDOPS_PIP_INDEX_URL:-https://pypi.org/simple}
+    restart: unless-stopped
+    env_file:
+      - ./mindops-backend/.env.production
+    environment:
+      # 覆盖生产 env 里面向宿主机的值；容器内一律走服务名
+      MINDOPS_DEBUG: "false"
+      MINDOPS_MYSQL_HOST: mysql
+      MINDOPS_MYSQL_PORT: "3306"
+      MINDOPS_REDIS_URL: redis://redis:6379/0
+      MINDOPS_MILVUS_URI: /app/data/milvus_lite.db
+    volumes:
+      - milvus_data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import sys,urllib.request;sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8010/health',timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks: [mindops]
+    logging: *default-logging
+
+  frontend:
+    build:
+      context: ./mindops-project
+      args:
+        # 同源反代：生产包里的 API 地址必须是相对路径
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      # 启用 HTTPS 后取消注释（证书挂载与 443 配置见 DEPLOY.md「HTTPS」一节）
+      # - "443:443"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      mindops:
+        # 固定 IP 供 backend 的 trusted_proxies 精确登记（见 webhook_whitelist.yaml）
+        ipv4_address: 172.28.0.10
+    logging: *default-logging
+
+volumes:
+  mysql_data:
+  redis_data:
+  milvus_data:
+
+networks:
+  mindops:
+    # 固定网段：backend/config/webhook_whitelist.yaml 的 trusted_proxies
+    # 需要登记该网段，才能采信 Nginx 传来的 X-Forwarded-For。
+    name: mindops_net
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

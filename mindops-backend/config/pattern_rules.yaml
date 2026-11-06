@@ -1,0 +1,142 @@
+rules:
+- name: redis_oom
+  component: redis
+  keywords:
+  - oom
+  - out of memory
+  - 内存使用率
+  - memory usage
+  aliases:
+  - redis 内存
+  - used_memory
+  - maxmemory
+  - 内存告警
+  - 内存不足
+  root_cause: Redis 内存容量或淘汰策略不足，导致内存压力持续升高。
+  playbook:
+  - command: redis-cli info memory
+    description: 确认内存使用与淘汰策略现状
+  - command: redis-cli config set maxmemory-policy allkeys-lru
+    description: 调整内存淘汰策略为 allkeys-lru
+  - command: redis-cli --bigkeys
+    description: 扫描大 Key，定位内存占用来源
+- name: mysql_connections
+  component: mysql
+  keywords:
+  - too many connections
+  - 连接数
+  - connection limit
+  aliases:
+  - max_connections
+  - conn 耗尽
+  - 连接池耗尽
+  - aborted_connects
+  root_cause: MySQL 连接池容量或连接泄漏导致可用连接耗尽。
+  playbook:
+  - command: mysql -e "show processlist"
+    description: 查看当前连接明细
+    risk_level: low
+  - command: mysql -e "kill 全部空闲连接"
+    description: 清理空闲连接（演示高危确认）
+    risk_level: high
+- name: disk_full
+  component: '*'
+  keywords:
+  - disk full
+  - no space left
+  - 磁盘满
+  - 磁盘空间
+  aliases:
+  - 磁盘使用率
+  - inode 满
+  - 空间不足
+  - no space
+  - 写满
+  root_cause: 磁盘空间耗尽，日志或数据文件无法继续写入。
+- name: nginx_5xx
+  component: nginx
+  keywords:
+  - 5xx
+  - bad gateway
+  - upstream
+  aliases:
+  - '502'
+  - '503'
+  - 错误率升高
+  - upstream error
+  - 网关错误
+  root_cause: Nginx 上游服务不可用或响应异常，导致网关错误。
+- name: pod_crashloop
+  component: '*'
+  keywords:
+  - crashloopbackoff
+  - crash loop
+  - pod 重启
+  aliases:
+  - crashloop
+  - 容器重启
+  - 反复重启
+  - backoff
+  - 容器退出
+  root_cause: 工作负载启动失败并反复重启，需要检查启动日志和资源配置。
+- name: redis_connection
+  component: redis
+  keywords:
+  - 连接拒绝
+  - connection refused
+  - 连接超时
+  aliases:
+  - redis 不可达
+  - connection reset
+  - 拒绝连接
+  - 连接失败
+  - 连接池耗尽
+  root_cause: Redis 服务不可达或网络策略阻断，需要检查实例状态与连接配置。
+- name: mysql_replication_lag
+  component: mysql
+  keywords:
+  - 主从延迟
+  - replication lag
+  - seconds behind
+  aliases:
+  - 主从同步延迟
+  - replica lag
+  - seconds_behind_master
+  - 从库延迟
+  root_cause: MySQL 复制线程延迟，需要检查 IO/SQL 线程和主库负载。
+- name: nginx_timeout
+  component: nginx
+  keywords:
+  - gateway timeout
+  - '504'
+  - upstream timeout
+  aliases:
+  - 上游超时
+  - upstream timed out
+  - 响应超时
+  root_cause: Nginx 上游响应超时，需要检查后端线程池和请求耗时。
+- name: docker_disk
+  component: docker
+  keywords:
+  - docker 磁盘
+  - overlay2
+  - docker prune
+  aliases:
+  - docker 空间
+  - images 占用
+  - 容器磁盘
+  - 镜像占满
+  root_cause: Docker 镜像或容器层占满磁盘，需要清理无用资源并设置配额。
+- name: cpu_saturation
+  component: '*'
+  keywords:
+  - cpu 使用率
+  - cpu saturation
+  - load average
+  aliases:
+  - cpu usage
+  - cpu 负载
+  - cpu 饱和
+  - load1
+  - 负载过高
+  root_cause: CPU 资源饱和，需要定位高消耗进程并评估扩容或限流。

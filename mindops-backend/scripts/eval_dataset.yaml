@@ -1,0 +1,375 @@
+# 诊断质量评测集（P0-1）
+#
+# 为什么需要它：`scripts/e2e_api_smoke.py` 的 51 条只证明"接口通不通"，
+# 不证明"诊断准不准"。有了本评测集，`CONF_THRESHOLD=0.6` 是否合理、
+# 规则命中的 0.95 该不该调、置信度回环到底有没有用 —— 才有数据可回答。
+#
+# 判定口径：`root_cause` 归一化后包含 `expect_keywords` 中**任意一个**即算命中。
+# 关键词取"正确结论一定会提到"的业务词，不追求与模型用词逐字一致。
+#
+# 难度分档（对齐 OpenRCA 的 easy / middle / hard）：
+# - easy   ：现象文本含规则库关键词，规则层可直接短路口径命中
+# - middle ：不含规则关键词，需要模型结合现象推断
+# - hard   ：根因不在告警组件自身，需要跨组件/多源证据串联
+#
+# 红鲱鱼样本（`red_herring: true`，借鉴 OpenSRE 合成评测的 adversarial red herrings，
+# https://github.com/Tracer-Cloud/opensre）：
+# 告警面（title 与 detail 前半）强烈暗示一个错误组件 —— 规则层极易误命中、模型极易
+# 顺着告警面复述 —— 而 detail 后半藏着指向真实根因的**相反**证据。专门考察
+# "模型是否沿证据链上溯"，对治 OpenRCA 失败模式研究中的 Symptom-as-Cause（39.9%）
+# 与 Incomplete Exploration（63.9%）：合格的诊断必须**先排除告警面假设**再下结论。
+# 判定口径与普通样本一致：`expect_keywords` 只含真实根因一定会提到的词，
+# 顺着告警面作答（"上游不可用 / 连接池太小 / SQL 没走索引"）必然 miss。
+version: 1
+updated: 2026-09-13
+
+samples:
+  # ---------------- easy：规则层应可直接命中 ----------------
+  - id: E01
+    difficulty: easy
+    component: redis
+    severity: critical
+    title: "Redis 实例内存使用率持续 98%，出现 OOM 拒绝写入"
+    detail: "used_memory 接近 maxmemory，客户端报 OOM command not allowed"
+    expect_component: redis
+    expect_keywords: ["内存", "淘汰", "容量"]
+  - id: E02
+    difficulty: easy
+    component: redis
+    severity: critical
+    title: "Redis connection refused，连接超时"
+    detail: "应用侧连接 Redis 全部被拒绝"
+    expect_component: redis
+    expect_keywords: ["不可达", "网络", "连接"]
+  - id: E03
+    difficulty: easy
+    component: mysql
+    severity: critical
+    title: "MySQL Too many connections，连接数达到上限"
+    detail: "max_connections 打满，新连接被拒绝"
+    expect_component: mysql
+    expect_keywords: ["连接池", "连接", "泄漏"]
+  - id: E04
+    difficulty: easy
+    component: mysql
+    severity: warning
+    title: "MySQL 主从延迟持续增大，seconds behind master 超过 300"
+    detail: "从库复制线程落后，读请求读到旧数据"
+    expect_component: mysql
+    expect_keywords: ["复制", "延迟", "主库"]
+  - id: E05
+    difficulty: easy
+    component: nginx
+    severity: critical
+    title: "Nginx 大量 502 Bad Gateway"
+    detail: "upstream 返回异常，网关错误率超过 20%"
+    expect_component: nginx
+    expect_keywords: ["上游", "网关", "不可用"]
+  - id: E06
+    difficulty: easy
+    component: nginx
+    severity: warning
+    title: "Nginx 504 Gateway Timeout 增多"
+    detail: "upstream timeout，后端响应超过 60s"
+    expect_component: nginx
+    expect_keywords: ["上游", "超时", "线程池"]
+  - id: E07
+    difficulty: easy
+    component: app-svc
+    severity: critical
+    title: "磁盘满，No space left on device"
+    detail: "数据目录写入失败，日志停止滚动"
+    expect_component: app-svc
+    expect_keywords: ["磁盘", "空间", "写入"]
+  - id: E08
+    difficulty: easy
+    component: web-svc
+    severity: warning
+    title: "CPU 使用率超过 95%，load average 持续升高"
+    detail: "单核 CPU 饱和，请求排队"
+    expect_component: web-svc
+    expect_keywords: ["cpu", "饱和", "负载"]
+  - id: E09
+    difficulty: easy
+    component: order-svc
+    severity: critical
+    title: "Pod 处于 CrashLoopBackOff，容器反复重启"
+    detail: "重启次数 15 次，启动阶段即退出"
+    expect_component: order-svc
+    expect_keywords: ["重启", "启动", "工作负载"]
+  - id: E10
+    difficulty: easy
+    component: docker
+    severity: warning
+    title: "Docker overlay2 目录占满磁盘"
+    detail: "无用镜像与容器层堆积，节点磁盘告警"
+    expect_component: docker
+    expect_keywords: ["镜像", "清理", "磁盘"]
+  - id: E11
+    difficulty: easy
+    component: redis
+    severity: warning
+    title: "Redis 内存告警：used_memory 连续 15 分钟超过阈值"
+    detail: "未开启 maxmemory-policy 淘汰"
+    expect_component: redis
+    expect_keywords: ["内存", "淘汰", "容量"]
+  - id: E12
+    difficulty: easy
+    component: mysql
+    severity: critical
+    title: "数据库连接数耗尽，应用报 connection limit 达到上限"
+    detail: "连接池无法获取新连接"
+    expect_component: mysql
+    expect_keywords: ["连接", "池", "耗尽"]
+
+  # ---------------- middle：需模型从现象推断 ----------------
+  - id: M01
+    difficulty: middle
+    component: redis
+    severity: warning
+    title: "Redis 命令延迟从 1ms 上升到 800ms，客户端频繁重连"
+    detail: "无错误日志，QPS 与往日持平"
+    expect_component: redis
+    expect_keywords: ["阻塞", "内存", "慢", "大 key"]
+  - id: M02
+    difficulty: middle
+    component: mysql
+    severity: warning
+    title: "MySQL 写入变慢，binlog 增长速度是平时的 5 倍"
+    detail: "磁盘使用率同步上升，提交耗时增加"
+    expect_component: mysql
+    expect_keywords: ["磁盘", "io", "日志", "空间"]
+  - id: M03
+    difficulty: middle
+    component: web-svc
+    severity: warning
+    title: "接口 P99 从 200ms 上升到 3s，错误率为 0"
+    detail: "所有请求最终成功，但响应明显变慢"
+    expect_component: web-svc
+    expect_keywords: ["下游", "依赖", "cpu", "资源", "慢"]
+  - id: M04
+    difficulty: middle
+    component: nginx
+    severity: warning
+    title: "Nginx 访问日志出现大量 499 状态码"
+    detail: "客户端在服务端返回前主动断开连接"
+    expect_component: nginx
+    expect_keywords: ["客户端", "超时", "上游", "等待"]
+  - id: M05
+    difficulty: middle
+    component: order-svc
+    severity: warning
+    title: "Pod 状态为 Ready，但 liveness probe 频繁失败并触发重建"
+    detail: "探针超时时间 1s，实际响应常在 1.2s 左右"
+    expect_component: order-svc
+    expect_keywords: ["探针", "超时", "资源", "阻塞", "配置"]
+  - id: M06
+    difficulty: middle
+    component: mysql
+    severity: warning
+    title: "数据库连接获取等待时间从 5ms 上升到 900ms"
+    detail: "连接池空闲连接数长期为 0，无连接错误"
+    expect_component: mysql
+    expect_keywords: ["连接池", "锁", "慢查询", "并发"]
+  - id: M07
+    difficulty: middle
+    component: job-svc
+    severity: warning
+    title: "定时任务队列长度持续增长，消费速度跟不上生产"
+    detail: "单实例部署，任务平均耗时翻倍"
+    expect_component: job-svc
+    expect_keywords: ["消费", "性能", "并发", "堆积", "慢"]
+  - id: M08
+    difficulty: middle
+    component: app-svc
+    severity: critical
+    title: "日志盘 inode 使用率达到 100%，新文件无法创建"
+    detail: "磁盘空间仍有剩余，但小文件数量过多"
+    expect_component: app-svc
+    expect_keywords: ["inode", "小文件", "日志", "清理"]
+  - id: M09
+    difficulty: middle
+    component: redis
+    severity: critical
+    title: "Redis 主从复制链路断开，从库数据停止更新"
+    detail: "repl 状态为 down，网络无丢包"
+    expect_component: redis
+    expect_keywords: ["复制", "网络", "主从", "同步"]
+  - id: M10
+    difficulty: middle
+    component: pay-svc
+    severity: warning
+    title: "服务 GC 停顿时间从 20ms 上升到 900ms，堆内存持续增长不回落"
+    detail: "Full GC 频率增加，重启后短期恢复正常"
+    expect_component: pay-svc
+    expect_keywords: ["内存", "泄漏", "gc", "堆"]
+  - id: M11
+    difficulty: middle
+    component: db-node
+    severity: warning
+    title: "磁盘 IO wait 从 2% 上升到 45%，应用写入延迟明显"
+    detail: "iops 达到设备上限，队列深度持续偏高"
+    expect_component: db-node
+    expect_keywords: ["io", "磁盘", "瓶颈", "负载"]
+  - id: M12
+    difficulty: middle
+    component: gateway
+    severity: warning
+    title: "网关错误率上升，但后端服务自身指标完全正常"
+    detail: "错误集中在新建连接阶段"
+    expect_component: gateway
+    expect_keywords: ["连接", "网关", "配置", "网络", "上游"]
+
+  # ---------------- hard：根因不在告警组件自身 ----------------
+  - id: H01
+    difficulty: hard
+    component: order-svc
+    severity: critical
+    title: "订单服务大量超时，同时 MySQL 连接数打满"
+    detail: "订单库慢查询激增，下游未变更"
+    expect_component: mysql
+    expect_keywords: ["mysql", "数据库", "连接", "慢查询"]
+  - id: H02
+    difficulty: hard
+    component: pay-svc
+    severity: critical
+    title: "支付服务 5xx 上升，同时 Redis 响应时间明显变慢"
+    detail: "支付链路依赖 Redis 做幂等校验"
+    expect_component: redis
+    expect_keywords: ["redis", "缓存", "依赖", "上游"]
+  - id: H03
+    difficulty: hard
+    component: web-svc
+    severity: warning
+    title: "前端页面加载慢，网关 P99 升高，后端服务耗时正常"
+    detail: "静态资源与网关转发耗时增加"
+    expect_component: gateway
+    expect_keywords: ["网关", "网络", "转发", "带宽", "连接"]
+  - id: H04
+    difficulty: hard
+    component: auth-svc
+    severity: critical
+    title: "用户登录失败率升高，认证服务 CPU 高，MySQL 慢查询同时增多"
+    detail: "认证服务对用户表做全表扫描"
+    expect_component: mysql
+    expect_keywords: ["慢查询", "索引", "数据库", "mysql"]
+  - id: H05
+    difficulty: hard
+    component: job-svc
+    severity: warning
+    title: "批量任务执行时间翻倍，磁盘 IO 饱和且 MySQL 复制延迟增大"
+    detail: "任务与主库写入争抢 IO"
+    expect_component: mysql
+    expect_keywords: ["io", "磁盘", "复制", "数据库", "主库"]
+  - id: H06
+    difficulty: hard
+    component: mq-svc
+    severity: warning
+    title: "消息队列消费积压，消费者 CPU 正常但网络重传率很高"
+    detail: "消费端与 broker 之间跨机房"
+    expect_component: net
+    expect_keywords: ["网络", "重传", "链路", "丢包"]
+  - id: H07
+    difficulty: hard
+    component: mysql
+    severity: critical
+    title: "主库 CPU 使用率高，从库延迟增大，应用读请求超时"
+    detail: "主库出现大量全表扫描型查询"
+    expect_component: mysql
+    expect_keywords: ["慢查询", "全表", "索引", "cpu"]
+  - id: H08
+    difficulty: hard
+    component: redis
+    severity: warning
+    title: "缓存命中率从 98% 掉到 60%，数据库 QPS 同步上升"
+    detail: "Redis 出现大量 key 提前过期"
+    expect_component: redis
+    expect_keywords: ["过期", "淘汰", "缓存", "内存"]
+  - id: H09
+    difficulty: hard
+    component: order-svc
+    severity: critical
+    title: "容器频繁重启，所在节点内存压力大"
+    detail: "节点上其它 pod 也被驱逐"
+    expect_component: node
+    expect_keywords: ["节点", "内存", "驱逐", "资源"]
+  - id: H10
+    difficulty: hard
+    component: api-gateway
+    severity: critical
+    title: "API 网关大量 502，后端 Pod 就绪探针失败"
+    detail: "Pod 存活但未通过就绪检查，被移出端点"
+    expect_component: order-svc
+    expect_keywords: ["就绪", "探针", "端点", "后端", "启动"]
+  - id: H11
+    difficulty: hard
+    component: upload-svc
+    severity: warning
+    title: "文件上传失败率上升，对象存储请求超时，本地磁盘使用率高"
+    detail: "上传先落本地临时目录再转存"
+    expect_component: upload-svc
+    expect_keywords: ["磁盘", "空间", "临时", "写入"]
+  - id: H12
+    difficulty: hard
+    component: report-svc
+    severity: warning
+    title: "报表查询超时，数据库慢查询增多，磁盘 IO 使用率高"
+    detail: "报表任务与在线业务共用实例"
+    expect_component: mysql
+    expect_keywords: ["慢查询", "io", "数据库", "mysql", "磁盘"]
+
+  # ---------------- 红鲱鱼：告警面误导，真实根因在别处 ----------------
+  - id: H13
+    difficulty: hard
+    red_herring: true
+    component: api-gateway
+    severity: critical
+    title: "API 网关大量 502，upstream 错误率超过 30%"
+    detail: "网关自身连接数与负载平稳。逐个上游排查：checkout-service 健康检查间歇超时被摘除流量，其实例 Full GC 每分钟 12 次，GC 后堆占用仍缓慢爬升，存在内存泄漏迹象"
+    expect_component: checkout-service
+    expect_keywords: ["gc", "垃圾回收", "内存泄漏", "checkout"]
+  - id: H14
+    difficulty: hard
+    red_herring: true
+    component: mysql
+    severity: critical
+    title: "MySQL 慢查询激增，写入延迟明显升高"
+    detail: "执行计划与索引均未变化。主机层磁盘 util 持续 100%、iowait 40%，时间窗与凌晨的物理备份任务完全重叠，备份任务未做限速"
+    expect_component: backup-job
+    expect_keywords: ["备份", "磁盘", "io", "限速", "iowait"]
+  - id: H15
+    difficulty: hard
+    red_herring: true
+    component: redis
+    severity: critical
+    title: "Redis 客户端大量 timeout，频繁重连"
+    detail: "Redis 内存、CPU、慢查询日志均平稳。同宿主机上日志采集 agent 输出量暴涨 20 倍，宿主机网卡丢包率 8%，同宿主机其它服务也出现网络抖动"
+    expect_component: network
+    expect_keywords: ["网络", "丢包", "网卡", "日志采集", "agent"]
+  - id: H16
+    difficulty: hard
+    red_herring: true
+    component: pay-svc
+    severity: critical
+    title: "支付服务数据库连接池打满，获取连接超时"
+    detail: "数据库侧 QPS 与慢查询平稳，max_connections 余量充足。发布记录显示 30 分钟前 pay-svc 上线新版本，新代码在循环体内逐条新建连接且异常分支未归还，属连接泄漏"
+    expect_component: pay-svc
+    expect_keywords: ["泄漏", "发布", "上线", "归还"]
+  - id: H17
+    difficulty: hard
+    red_herring: true
+    component: report-svc
+    severity: warning
+    title: "报表查询批量超时，报表服务负载正常"
+    detail: "报表服务 CPU 与连接数平稳。数据库侧 SHOW PROCESSLIST 可见大量 Metadata lock 等待，源头是运维工单正在对该库大表执行加字段 DDL，锁表已持续 10 分钟"
+    expect_component: mysql
+    expect_keywords: ["锁", "ddl", "加字段", "元数据", "metadata", "变更"]
+  - id: H18
+    difficulty: hard
+    red_herring: true
+    component: web-svc
+    severity: critical
+    title: "web-svc 5xx 突增，错误集中在部分实例"
+    detail: "近期无发布变更。故障实例全部落在同一 Kubernetes 节点：该节点内存压力触发 OOM Killer 驱逐了这批实例，重启期间探针失败被摘除流量"
+    expect_component: k8s-node
+    expect_keywords: ["节点", "oom", "驱逐", "内存压力", "k8s"]

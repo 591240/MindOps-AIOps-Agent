@@ -1,0 +1,24 @@
+{
+  "version": "4",
+  "groupKey": "{}:{alertname=\"RedisMemoryHigh\"}",
+  "status": "firing",
+  "receiver": "mindops",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "RedisMemoryHigh",
+        "severity": "P1",
+        "instance": "redis-01:6379",
+        "component": "redis",
+        "job": "redis-exporter"
+      },
+      "annotations": {
+        "summary": "Redis 内存使用率超过 90%",
+        "description": "当前使用 3.2GB / 4GB，最大 Key 为 `user:session:{uid}` 累计 1.6GB"
+      },
+      "startsAt": "2026-09-03T10:23:00Z",
+      "fingerprint": "abc123def456"
+    }
+  ]
+}

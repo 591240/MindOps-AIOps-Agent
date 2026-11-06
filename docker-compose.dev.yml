@@ -1,0 +1,57 @@
+# 本机开发编排：只把后端装进容器，MySQL / Redis / Milvus 复用你已经在跑的实例。
+#
+# 可行性是我实测的，不是假设：Docker Desktop 下容器能连到宿主**绑在 127.0.0.1** 的服务
+#   redis-cli -h host.docker.internal -p 16379 ping  ->  PONG
+#   /dev/tcp/host.docker.internal/19530              ->  可达
+#   /dev/tcp/host.docker.internal/3306               ->  可达
+#
+# 用法：
+#   docker compose -f docker-compose.dev.yml up --build backend
+#   curl http://127.0.0.1:8010/health
+#
+# ⚠ 这份文件依赖你本机的 sf-redis(16379) / sf-milvus(19530) / 宿主 mysqld(3306)，
+#   换一台机器就失效。公开仓库要的是"自带 mysql + redis + milvus"的自足 compose，
+#   那份留到做上线产物时再写，两者不要混用同一个文件名。
+
+# 必须显式给项目名：Compose 用目录名推导项目名，而本仓库在中文目录（智维）下，
+# 非 ASCII 项目名会直接报 "project name must not be empty"。
+name: mindops
+
+services:
+  backend:
+    build:
+      context: ./mindops-backend
+      args:
+        # 本机直连 pypi.org 装不动（构建会卡在下载），公开仓库可改回默认索引
+        PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+    image: mindops-backend:dev
+    container_name: mindops_backend
+    # 本机凭据来源。该文件在 .gitignore 内，不会进仓库；
+    # 换机器时先 cp mindops-backend/.env.example mindops-backend/.env 再填值。
+    env_file:
+      - ./mindops-backend/.env
+    environment:
+      # .env 里这两个值是 127.0.0.1 —— 在容器里指的是容器自己，必须改指宿主
+      MINDOPS_MYSQL_HOST: host.docker.internal
+      MINDOPS_REDIS_URL: redis://host.docker.internal:16379/3
+      # Milvus 走 Lite（本地文件），不再要求宿主 19530 上有个容器在跑；
+      # 数据落在命名卷里，重建镜像不会把向量索引和 embedding 缓存一起清掉。
+      MINDOPS_MILVUS_URI: /app/data/milvus_lite.db
+      # 本地开发需要联调账号；显式开启，避免"debug 顺带投放已知口令"。
+      # 公网 demo 部署请去掉这一行并在启动后注册账号。
+      MINDOPS_SEED_DEMO_USERS: "1"
+      # debug 会关闭登录限流、允许验证码 debug_code 回显——只用于本机开发，
+      # 不要把这个栈直接暴露到公网。
+      MINDOPS_DEBUG: "true"
+    volumes:
+      - mindops_data:/app/data
+    ports:
+      - "8010:8010"
+    extra_hosts:
+      # Linux 上 host.docker.internal 不是默认存在，靠 host-gateway 兜住
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+volumes:
+  # 向量索引（milvus-lite）与 embedding 缓存的落盘位置
+  mindops_data:

@@ -1,0 +1,27 @@
+# 文档：docs/12-F-01-告警接入专项文档-V1.1.md §6.3 内网 IP 白名单（webhook 专用）
+#
+# trusted_proxies：可信反代层数（网关 / Nginx 内网 IP）。
+#   只有当「直连 socket IP」属于 trusted_proxies 时，才采信 X-Forwarded-For；
+#   否则一律使用直连 socket IP，无视任何 XFF（防外网伪造头部绕过白名单）。
+#
+# allowed_cidrs：允许访问 /alerts/webhook 的网段。
+
+# ⚠️ trusted_proxies 里的每一段都等于"该网段内的调用方可以任意伪造
+#    X-Forwarded-For"。写整段私网（10/8、172.16/12、192.168/16）会让任何内网
+#    主机、任何容器都冒充成"任意内网客户端"，同时过白名单并换取新的限流分桶。
+#    因此默认只信任本机回环。走 Nginx/网关反代时，把**那一台**反代的地址显式加进来
+#    （compose 里给它固定 ipv4_address，例如 - "172.20.0.5/32"）。
+#    注意：反代确实存在但没登记时，白名单仍然放行（直连 IP 是反代的内网地址），
+#    但限流会把所有真实用户挤进同一个桶——那时必须登记反代地址。
+trusted_proxies:
+  - "127.0.0.1/32"
+  # docker-compose.yml 里 Nginx(frontend) 的固定地址：只信任这一台反代
+  - "172.28.0.10/32"
+
+allowed_cidrs:
+  - "10.0.0.0/8"        # 内网主段
+  - "172.16.0.0/12"     # 内网次段
+  - "192.168.0.0/16"    # 内网常见段
+  - "127.0.0.1/32"      # 本机 Prometheus 测试
+  # 上面四段只解决"谁能连进来"，不解决"请求是不是你的 Alertmanager 发的"。
+  # 公网可达的部署必须同时配置 MINDOPS_WEBHOOK_TOKEN（请求头 X-Webhook-Token）。

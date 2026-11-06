@@ -1,0 +1,7 @@
+packages:
+  - "."
+
+# pnpm 9（Docker 构建阶段）要求 workspace 文件必须有 packages 字段；
+# pnpm 10+ 把构建脚本白名单也放在这里。
+allowBuilds:
+  esbuild: true

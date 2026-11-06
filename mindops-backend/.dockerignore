@@ -1,0 +1,27 @@
+# 别把宿主机的东西烤进镜像——尤其 .env（真实 SMTP 授权码 / JWT / Fernet 主密钥）
+.env
+.env.*
+!.env.example
+
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.pytest-tmp/
+
+# 运行期数据与本机产物：容器里由 /app/data 重新生成
+data/
+*.db
+*.sql
+*.log
+
+# 仓库材料不进运行镜像
+tests/
+scripts/
+sample/
+*.md
+Dockerfile
+.dockerignore
+eval_result.json
+eval_report.txt
+_t_f11_out.txt
